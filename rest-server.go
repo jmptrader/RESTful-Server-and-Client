@@ -1,12 +1,14 @@
 package main
 
-import "net"
+//import "net"
 import "fmt"
 import "./myUtils"
 import "time"
 import "strconv"
-import "net/rpc"
-import "errors"
+//import "net/rpc"
+import "net/http"
+//import "errors"
+import "github.com/gorilla/mux"
 //import "reflect"
 
 //CONSTANTS
@@ -255,12 +257,13 @@ func (client *Client)removeClientFromSystem(){
 /**********************************/
 
 //wrapper for the internal function of the same name so that it can be used internally as well as by the client
-func (server *Server)SendMessageToCurrentRoom(args *DoubleArgs, reply *string) error{
-  sender := getClientByName(args.Arg1);
+func SendMessageToCurrentRoom(w http.ResponseWriter, r *http.Request)  {
+  vars := mux.Vars(r)
+  clientName := vars["USER"]
+  message := r.Header.Get("message")
+  sender := getClientByName(clientName);
   sender.updateLastUsedTime();
-  message := args.Arg2;
   sendMessageToCurrentRoom(sender, message);
-  return nil;
 }
 
 
@@ -303,94 +306,103 @@ type DoubleArgs struct{
 }
 
 //the client must call this one time, it will set the client up on the server and send the server back their unique name
-func (t *Server)Connect(name string, userNameReply *string) error {
+func Connect(w http.ResponseWriter, r *http.Request) {
+   reply := "";
     if len(ClientArray) < MAX_CLIENTS{//server can have more clients
-      *userNameReply = addClient();
-      return nil;
+      reply = addClient();
     }else{
-      return errors.New("Server is currently full, try again later");
+      reply = "ERROR_FULL";
     }
+    fmt.Fprintf(w, reply)
 }
 
 
 //passes the latest message on the clients output channel to the client
-func (server *Server) MessageClient(clientName string, reply *string) error {
-cli := getClientByName(clientName);
-fmt.Println("hoboutere"+clientName)
-*reply = <-cli.outputChannel;
-fmt.Println("hoboutere2"+clientName)
-if (*reply == TIMEOUT_MESSAGE){
-  return errors.New("You have timed out")
-}
-return nil;
+func  MessageClient(w http.ResponseWriter, r *http.Request)  {
+  vars := mux.Vars(r)
+  clientName := vars["USER"]
+  cli := getClientByName(clientName);
+  fmt.Println("hoboutere"+clientName)
+  reply := <-cli.outputChannel;
+  fmt.Fprintf(w, reply)
+  fmt.Println("hoboutere2"+clientName)
+  if (reply == TIMEOUT_MESSAGE){
+
+  }
 }
 
 //creates a room and logs to the console
-func (server *Server)ProcessCreateRoomCommand(c *DoubleArgs, reply *string) error {
-  client := getClientByName(c.Arg1);
+func ProcessCreateRoomCommand(w http.ResponseWriter, r *http.Request){
+  vars := mux.Vars(r)
+  roomName := vars["ROOMNAME"]
+  clientName := r.Header.Get("username")
+  client := getClientByName(clientName);
   client.updateLastUsedTime();
-  roomName := c.Arg2;
   room := createRoom(roomName, client);
   if room == nil { //name of room was not unique
-    return nil
+    return
   }
   client.messageClientFromServer(client.name+" created a new room called "+roomName)
-  return nil
 }
 
-func (server *Server)ProcessLeaveRoomCommand(clientName string, reply *string) error{
+func ProcessLeaveRoomCommand(w http.ResponseWriter, r *http.Request){
+  vars := mux.Vars(r)
+  clientName := vars["USER"]
   client := getClientByName(clientName);
   client.updateLastUsedTime();
   client.removeClientFromCurrentRoom();
-  client.messageClientFromServer("You have left the room.")
-  return nil
+  client.messageClientFromServer("You have left the room")
 }
 
 //sends a list of the current users in the room to the client
-func (server *Server)ProcessCurrRoomUsersCommand(clientName string, reply *string) error{
-  //check if the user is in a room
+func ProcessCurrRoomUsersCommand(w http.ResponseWriter, r *http.Request){
+  vars := mux.Vars(r)
+  clientName := vars["USER"]  //check if the user is in a room
   client := getClientByName(clientName);
   client.updateLastUsedTime();
   if client.currentRoom == nil{
     client.messageClientFromServer(NOT_IN_ROOM_ERR)
-    return nil
+    return
   }
   client.messageClientFromServer("Current users in "+client.currentRoom.name+" are:")
   for _, users:= range client.currentRoom.clientList {
     client.messageClientFromServer(users.name);
   }
-  return nil
 }
 
 
 //sends a message to the client telling them which room they are currently in, if not in a room, inform the user
- func (server *Server)ProcessCurrRoomCommand(clientName string, reply *string) error{
+ func ProcessCurrRoomCommand(w http.ResponseWriter, r *http.Request){
+   vars := mux.Vars(r)
+   clientName := vars["USER"]
    client := getClientByName(clientName);
    client.updateLastUsedTime();
    if client.currentRoom == nil{
      client.messageClientFromServer(NOT_IN_ROOM_ERR)
-     return nil
+     return
    }
    client.messageClientFromServer("current room: "+client.currentRoom.name);
-   return nil
+   return
  }
 
 //Loops through the HELP_INFO array and sends all the lines of help info to the user
-func (server *Server)ProcessHelpCommand(clientName string, reply *string) error{
-       client := getClientByName(clientName);
-       client.updateLastUsedTime();
-       for _, helpLine := range HELP_INFO{
-         client.messageClientFromServer(helpLine);
-       }
-       return nil
+func ProcessHelpCommand(w http.ResponseWriter, r *http.Request){
+  clientName := r.Header.Get("username")
+  fmt.Println(clientName)
+  client := getClientByName(clientName);
+  client.updateLastUsedTime();
+  for _, helpLine := range HELP_INFO{
+      client.messageClientFromServer(helpLine);
+  }
 }
 
 //because processQuit is used elseware we are wrapping it in a serveer version
-func (server *Server)ProcessQuitCommand(clientName string, reply *string) error{
+func ProcessQuitCommand(w http.ResponseWriter, r *http.Request){
+  vars := mux.Vars(r)
+  clientName := vars["USER"]
   client := getClientByName(clientName);
   client.updateLastUsedTime();
   processQuitCommandHelper(client);
-  return nil;
 }
 //quits the client from the server
 func processQuitCommandHelper(client *Client){
@@ -406,7 +418,8 @@ func processTimeout(client *Client){
 }
 
 //sends the list of rooms to the client
-func (server *Server)ProcessListRoomsCommand(clientName string, reply *string) error{
+func ProcessListRoomsCommand(w http.ResponseWriter, r *http.Request){
+  clientName := r.Header.Get("username")
   client := getClientByName(clientName);
   client.updateLastUsedTime();
   client.messageClientFromServer("List of rooms:")
@@ -414,19 +427,20 @@ func (server *Server)ProcessListRoomsCommand(clientName string, reply *string) e
     client.messageClientFromServer(roomName.name);
   }
   client.messageClientFromServer("");
-  return nil;
 }
 
 //returns true of the room was joined successfully, returns false if there was a problem like the room does not exist
-func (server *Server)ProcessJoinRoomCommand(args *DoubleArgs, reply *string) error{
-  client := getClientByName(args.Arg1);
+func ProcessJoinRoomCommand(w http.ResponseWriter, r *http.Request){
+  vars := mux.Vars(r)
+  clientName := vars["USER"]
+  roomName := vars["ROOMNAME"]
+  client := getClientByName(clientName);
   client.updateLastUsedTime();
-  roomName := args.Arg2;
   roomToJoin := getRoomByName(roomName);
   if roomToJoin == nil{ //the room doesnt exist
     fmt.Println(client.name+" tried to enter room: "+roomName+" which does not exist");
     client.messageClientFromServer("The room "+roomName+" does not exist")
-    return nil;
+    return;
   }
   //Room exists so now we can join it.
   //check if user is already in the room
@@ -443,24 +457,37 @@ func (server *Server)ProcessJoinRoomCommand(args *DoubleArgs, reply *string) err
     //display all messages in the room
     displayRoomsMessages(client, roomToJoin)
   }
-  return nil
 }
 
 
 //Main function for starting the server, will open the server on the SERVER_IP and the SERVER_PORT
 func main() {
+router := mux.NewRouter().StrictSlash(true)
+router.HandleFunc("/", Connect).
+  Methods("GET");
+router.HandleFunc("/help", ProcessHelpCommand).
+  Methods("GET");
+router.HandleFunc("/{USER}/messages", MessageClient).
+  Methods("GET");
+router.HandleFunc("/rooms", ProcessListRoomsCommand).
+  Methods("GET");
+router.HandleFunc("/rooms/{ROOMNAME}", ProcessCreateRoomCommand).
+  Methods("POST");
+router.HandleFunc("/{USER}", ProcessQuitCommand).
+  Methods("DELETE");
+router.HandleFunc("/rooms/{ROOMNAME}/{USER}", ProcessJoinRoomCommand).
+  Methods("POST");
+router.HandleFunc("/{USER}/leaveroom", ProcessLeaveRoomCommand).
+  Methods("DELETE");
+router.HandleFunc("/{USER}/currentroomusers", ProcessCurrRoomUsersCommand).
+  Methods("GET");
+router.HandleFunc("/{USER}/currentroom", ProcessCurrRoomCommand).
+  Methods("GET");
+router.HandleFunc("/{USER}/messageRoom", SendMessageToCurrentRoom).
+  Methods("POST");
+http.ListenAndServe(":"+SERVER_PORT, router)
+
+
   fmt.Println("Launching server...")
   //Start the server on the constant IP and port
-  ln, connectError := net.Listen("tcp", ":"+SERVER_PORT)
-  //check for errors in the server starup
-  if connectError != nil {
-    fmt.Println("Error Launching server "+ connectError.Error())
-  }else{
-    fmt.Println("Server Started")
-  }
-  //start RPC
-  server := new(Server);
-  go manageRooms();//start the room manager
-  rpc.Register(server);
-  rpc.Accept(ln)//continually waits on incomming commections
 }
