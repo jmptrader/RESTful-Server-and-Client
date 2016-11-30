@@ -407,6 +407,7 @@ func ProcessQuitCommand(w http.ResponseWriter, r *http.Request){
 //quits the client from the server
 func processQuitCommandHelper(client *Client){
   client.removeClientFromCurrentRoom();
+  time.Sleep(time.Second*2)
   client.removeClientFromSystem();
 }
 
